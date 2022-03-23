@@ -1,16 +1,6 @@
-import com.twitter.concurrent.{Scheduler, ThreadPoolScheduler}
 import com.twitter.finagle.Mysql
 import com.twitter.finagle.mysql.Client
-import com.twitter.finagle.netty4.param.WorkerPool
-import com.twitter.util.{
-  Await,
-  Awaitable,
-  Future,
-  FuturePool,
-  JavaTimer,
-  Monitor,
-  Timer
-}
+import com.twitter.util.{Await, Future, FuturePool, JavaTimer}
 import io.netty.util.concurrent.DefaultThreadFactory
 import kamon.Kamon
 import kamon.context.Context
@@ -34,36 +24,40 @@ object Application {
   private def singleMysql(client: Client)(id: Int): Future[Unit] = {
     val keyName = s"the key id=${id}"
     val keyValue = s"the string $id"
-    for {
-      _ <- Future(Kamon.storeContext(Context.of(keyName, keyValue)))
-      _ <- Future(printCtx("before"))
-      _ <- client.select("select * from ids limit 10")(identity)
-      _ <- Future(printCtx("after"))
-      _ <- Future(
-        assert(
-          Kamon.currentContext().getTag(plain(keyName)) == keyValue,
-          s"Failed on iteration $id"
-        )
-      )
-    } yield ()
+    Kamon.runWithContext(Context.of(keyName, keyValue)) {
+      for {
+        _ <- Future(printCtx("before"))
+        _ <- client.select("select * from ids limit 10")(identity)
+        _ <- Future(printCtx("after"))
+        _ <- Future {
+          val result = Kamon.currentContext().getTag(plain(keyName))
+
+          assert(
+            result == keyValue,
+            s"Failed on iteration $id, result=[$result]"
+          )
+        }
+      } yield ()
+    }
   }
 
   private def single(pool: FuturePool)(id: Int): Future[Unit] = {
-    val keyName = s"the key id=${id}"
+    val keyName = s"the key id=$id"
     val keyValue = s"the string $id"
-    for {
-      _ <- Future(Kamon.storeContext(Context.of(keyName, keyValue)))
-      _ <- Future(printCtx("before"))
-      //      _ <- client.select("select * from ids limit 10")(identity)
-      _ <- pool.apply(printCtx("within"))
-      _ <- Future(printCtx("after"))
-      _ <- Future(
-        assert(
-          Kamon.currentContext().getTag(plain(keyName)) == keyValue,
-          s"Failed on iteration $id"
+    Kamon.runWithContext(Context.of(keyName, keyValue)) {
+      for {
+        _ <- Future(printCtx("before"))
+        //      _ <- client.select("select * from ids limit 10")(identity)
+        _ <- pool.apply(printCtx("within"))
+        _ <- Future(printCtx("after"))
+        _ <- Future(
+          assert(
+            Kamon.currentContext().getTag(plain(keyName)) == keyValue,
+            s"Failed on iteration $id"
+          )
         )
-      )
-    } yield ()
+      } yield ()
+    }
   }
 
   def mkNettyThreadFactory(): ThreadFactory = {
@@ -102,14 +96,13 @@ object Application {
 
     implicit val timer = new JavaTimer(true)
 
-//    val batchExec = Future.batched(10)(batcher(client))
-
 //    val results = Future.collect((0 to 10).map(single(tf)))
     val results = Future.collect((0 to 10).map(singleMysql(client)))
 
-    val results2 = Await.result(results)
+    Await.result(results)
 
     printCtx()
+
     Await.result(client.close())
     SAwait.result(Kamon.stop(), Duration.Inf)
   }
