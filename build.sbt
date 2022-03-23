@@ -1,5 +1,5 @@
 
-val Finagle = "21.9.0"
+val Finagle = "22.2.0"
 val Kamon = "2.5.0"
 
 scalaVersion := "2.13.8"
